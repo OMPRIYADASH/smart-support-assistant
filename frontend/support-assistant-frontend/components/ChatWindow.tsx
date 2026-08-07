@@ -5,10 +5,16 @@ import { Message, ChatResponse, UploadResponse } from "@/types";
 import MessageList from "./MessageList";
 import MessageInput from "./MessageInput";
 import Sidebar from "./Sidebar";
-import ChatHistory from "./ChatHistory";
+import { Menu } from "lucide-react";
+//import SettingsDrawer from "./SettingsDrawer";
+//import ProfileMenu from "./ProfileMenu";
+import { useTheme } from "@/context/ThemeContext";
+ 
 
 
 const API_BASE_URL = "http://localhost:8000";
+
+type SidebarView = "main" | "documents" | "chats" | "settings" | "profile";
 
 export default function ChatWindow() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -19,7 +25,35 @@ export default function ChatWindow() {
   const [documents, setDocuments] = useState<string[]>([]); 
   const [chats, setChats] = useState<{ id: string; title: string }[]>([]);
   const [showSidebar, setShowSidebar] = useState(true);
+  const [sidebarView, setSidebarView] = useState<SidebarView>("main");
+  const [uploading, setUploading] = useState(false);
+
+
+  const { theme } = useTheme();
+  console.log("Current theme =", theme);
+  const isDark =
+  theme === "dark"
+    ? true
+    : theme === "light"
+    ? false
+    : typeof window !== "undefined" &&
+      window.matchMedia("(prefers-color-scheme: dark)").matches;
   
+  
+
+  const handleSidebarViewChange = (view: SidebarView) => {
+    setSidebarView(view);
+  };
+
+  const handleSelectDocument = (doc: string) => {
+    setUploadedDocument(doc);
+    setSidebarView("main");
+  };
+
+  const handleSelectChat = (id: string) => {
+    loadConversation(id);
+    setSidebarView("main");
+  };
 
   const loadChats = async () => {
   try {
@@ -69,7 +103,7 @@ export default function ChatWindow() {
 
     console.log(docs);
 
-    setDocuments(docs.map((d:any)=>d.filename));
+    setDocuments(docs.map((d: { filename: string }) => d.filename));
 
     if(docs.length>0){
       setUploadedDocument(docs[0].filename);
@@ -106,16 +140,38 @@ export default function ChatWindow() {
 
       // Update conversation ID if it's a new one
       if (!conversationId) {
-        setConversationId(data.conversation_id);
+      setConversationId(data.conversation_id);
       }
 
       await loadChats();
 
-      // Add assistant message
-      setMessages((m) => [
-        ...m,
-        { role: "assistant", content: data.reply },
-      ]);
+      // Add an empty assistant message first
+      // Add an empty assistant message
+setMessages((m) => [
+  ...m,
+  {
+    role: "assistant",
+    content: "",
+  },
+]);
+
+// Animate the assistant reply
+let currentText = "";
+
+for (let i = 0; i < data.reply.length; i++) {
+  currentText += data.reply[i];
+
+  setMessages((prev) => {
+    const updated = [...prev];
+    updated[updated.length - 1] = {
+      role: "assistant",
+      content: currentText,
+    };
+    return updated;
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 12));
+}
     } catch (err) {
       const errorMessage =
         err instanceof Error ? err.message : "Failed to send message";
@@ -131,9 +187,8 @@ export default function ChatWindow() {
 
   const upload = async (file: File) => {
   try {
-    setError(null);
-    setLoading(true);
-
+  setError(null);
+  setUploading(true);
     const formData = new FormData();
     formData.append("file", file);
 
@@ -147,6 +202,7 @@ export default function ChatWindow() {
     }
 
     const data: UploadResponse = await response.json();
+    console.log("Upload Response:", data);
 
     setUploadedDocument(data.filename);
 
@@ -154,14 +210,15 @@ export default function ChatWindow() {
     await loadDocuments();
 
     setMessages((m) => [
-    ...m,
+  ...m,
   {
     role: "user",
     content: `📎 Uploaded: ${data.filename}`,
   },
   {
     role: "assistant",
-    content: `Document uploaded successfully and indexed into ${data.chunks} chunks. You can now ask questions or click "Summarize".`,
+    content: data.summary,
+    suggestions: data.suggestions,
   },
 ]);
   } catch (err) {
@@ -170,7 +227,7 @@ export default function ChatWindow() {
     setError(errorMessage);
     console.error("Upload error:", err);
   } finally {
-    setLoading(false);
+    setUploading(false);
   }
 };
   
@@ -212,46 +269,60 @@ export default function ChatWindow() {
   };
 
   useEffect(() => {
-    loadDocuments();
-    loadChats();
+    const loadInitialData = () => {
+      void loadDocuments();
+      void loadChats();
+    };
+
+    const timeoutId = window.setTimeout(loadInitialData, 0);
+    return () => window.clearTimeout(timeoutId);
   }, []);
 
   return (
-  <div className="flex h-screen bg-slate-950">
+  <div
+  className={`flex h-screen overflow-hidden transition-colors duration-300 ${
+    isDark
+      ? "bg-slate-950 text-white"
+      : "bg-gray-100 text-slate-900"
+  }`}
+>
 
   {showSidebar && (
-  <>
-    <Sidebar
-      documents={documents}
-      selected={uploadedDocument}
-      onSelect={setUploadedDocument}
-    />
-
-    <ChatHistory
-      chats={chats}
-      selectedId={conversationId}
-      onSelect={loadConversation}
-    />
-  </>
+  <Sidebar
+  key={sidebarView}
+  documents={documents}
+  selected={uploadedDocument}
+  onSelect={handleSelectDocument}
+  chats={chats}
+  selectedChat={conversationId}
+  onSelectChat={handleSelectChat}
+  sidebarView={sidebarView}
+  setSidebarView={handleSidebarViewChange}
+/>
 )}
 
     {/* Chat Area */}
-    <div className="flex flex-col flex-1">
-      <div className="flex flex-col h-screen bg-slate-950 text-white">
+<div
+  className={`flex-1 flex flex-col min-h-0 overflow-hidden transition-colors duration-300 ${
+    isDark ? "bg-slate-950" : "bg-white"
+  }`}
+>
 
-      <div className="bg-gradient-to-r from-indigo-600 via-blue-600 to-cyan-500 shadow-xl px-6 py-3 flex items-center justify-between">
+    <div className="shadow-xl px-6 py-4 flex items-center justify-between bg-gradient-to-r from-indigo-600 via-blue-600 to-cyan-500">
 
-    {/* Left */}
+  {/* Left */}
+  <div className="flex items-center">
     <button
-  onClick={() => setShowSidebar(!showSidebar)}
-  className="p-2 rounded-lg hover:bg-white/10 transition"
-  >
-  <span className="text-2xl">☰</span>
-  </button>
+      onClick={() => setShowSidebar(!showSidebar)}
+      className="p-2 rounded-lg hover:bg-white/10 transition"
+    >
+      <Menu size={24} className="text-white" />
+    </button>
+  </div>
 
     {/* Center */}
     <div className="text-center">
-    <h1 className="text-xl font-semibold">
+    <h1 className="text-2xl font-bold text-white">
       Smart Support Assistant
     </h1>
 
@@ -262,40 +333,29 @@ export default function ChatWindow() {
     )}
     </div>
 
-    {/* Right */}
-    <div className="flex items-center gap-3">
+    <div className="w-20" />
 
   </div>
 
-  </div>
-
-
-      {/* Error */}
-      {error && (
-        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3">
-          <p className="text-sm">{error}</p>
-        </div>
-      )}
-
-      {/* Messages */}
-      <MessageList
-        messages={messages}
-        loading={loading}
-      />
+  <div className="flex-1 min-h-0">
+  <MessageList
+    messages={messages}
+    loading={loading}
+    onSuggestionClick={send}
+  />
+</div>
 
       {/* Input */}
       <MessageInput
         onSend={send}
         onUpload={upload}
         onSummary={summarizeDocument}
-        disabled={loading}
+        disabled={loading || uploading}
       />
+    </div>
 
     </div>
 
-  </div>
-
-  </div>
 );
 
 }

@@ -5,23 +5,35 @@ from sqlalchemy.orm import Session
 from app.models import Conversation, Message
 
 
-def get_or_create_conversation(db: Session, conversation_id: str | None) -> Conversation:
-    if not conversation_id:
+def get_or_create_conversation(
+    db: Session,
+    conversation_id: str | uuid.UUID | None,
+) -> Conversation:
+
+    if conversation_id is None:
         conversation = Conversation()
         db.add(conversation)
         db.flush()
         return conversation
 
-    try:
-        conversation_uuid = uuid.UUID(conversation_id)
-    except ValueError as error:
-        raise ValueError("Invalid conversation_id") from error
+    if isinstance(conversation_id, uuid.UUID):
+        conversation_uuid = conversation_id
+    else:
+        try:
+            conversation_uuid = uuid.UUID(conversation_id)
+        except ValueError as error:
+            raise ValueError("Invalid conversation_id") from error
 
-    conversation = db.query(Conversation).filter(Conversation.id == conversation_uuid).first()
-    if not conversation:
+    conversation = (
+        db.query(Conversation)
+        .filter(Conversation.id == conversation_uuid)
+        .first()
+    )
+
+    if conversation is None:
         raise LookupError("Conversation not found")
-    return conversation
 
+    return conversation
 
 def save_message(db: Session, conversation_id, role: str, content: str) -> Message:
     message = Message(

@@ -1,6 +1,7 @@
 export interface Message {
   role: "user" | "assistant";
   content: string;
+  suggestions?: string[];
 }
 
 export interface ChatRequest {
@@ -20,6 +21,8 @@ export interface ChatResponse {
 export interface UploadResponse {
   filename: string;
   chunks: number;
+  summary: string;
+  suggestions: string[];
 }
 
 export interface SummaryResponse {

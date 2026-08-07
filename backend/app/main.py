@@ -1,11 +1,11 @@
-from app.routes.feature import router as feature_router
-from app.routes.documents import router as documents_router
-from app.routes.chat import router as chat_router
-from app import models
-from app.database import Base, engine
-from sqlalchemy import text
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
+from app.database import Base, engine
+from app import models
+from app.routes.chat import router as chat_router
+from app.routes.documents import router as documents_router
+from app.routes.feature import router as feature_router
 from dotenv import load_dotenv
 
 # Load environment variables FIRST

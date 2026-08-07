@@ -1,3 +1,5 @@
+import { useTheme } from "@/context/ThemeContext";
+
 interface ChatItem {
   id: string;
   title: string;
@@ -14,14 +16,32 @@ export default function ChatHistory({
   selectedId,
   onSelect,
 }: Props) {
-  return (
-    <div className="w-64 bg-slate-900 border-r border-slate-800 flex flex-col">
 
-      <div className="p-4 border-b border-slate-800">
-        <h2 className="text-lg font-semibold text-white">
-          💬 Chats
-        </h2>
-      </div>
+const { theme } = useTheme();
+const isDark = theme === "dark";
+
+  return (
+    <div
+  className={`w-64 border-r flex flex-col transition-colors duration-300 ${
+    isDark
+      ? "bg-slate-900 border-slate-800"
+      : "bg-white border-gray-300"
+  }`}
+>
+
+      <div
+  className={`p-4 border-b ${
+    isDark ? "border-slate-800" : "border-gray-300"
+  }`}
+>
+  <h2
+    className={`text-lg font-semibold ${
+      isDark ? "text-white" : "text-slate-900"
+    }`}
+  >
+    💬 Chats
+  </h2>
+</div>
 
       <div className="flex-1 overflow-y-auto p-2 space-y-2">
         {chats.map((chat) => (
@@ -31,7 +51,9 @@ export default function ChatHistory({
             className={`w-full text-left p-3 rounded-xl transition ${
               selectedId === chat.id
                 ? "bg-cyan-600 text-white"
-                : "bg-slate-800 hover:bg-slate-700 text-gray-300"
+                : isDark
+                  ? "bg-slate-800 hover:bg-slate-700 text-gray-300"
+                  : "bg-gray-100 hover:bg-gray-200 text-slate-900"
             }`}
           >
             <div className="text-sm font-medium truncate">
