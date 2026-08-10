@@ -6,6 +6,7 @@ Routes call generate_reply() and handle the two outcomes:
 a string, or an exception.
 """
 
+import importlib
 import hashlib
 import logging
 import os
@@ -173,30 +174,46 @@ def generate_reply(
 # Embeddings
 # -------------------------------------------------------------------
 
+
+EMBEDDING_MODEL = "sentence-transformers/all-mpnet-base-v2"
+_embedding_model = None
+
+try:
+    SentenceTransformer = importlib.import_module(
+        "sentence_transformers").SentenceTransformer
+    _embedding_model = SentenceTransformer(EMBEDDING_MODEL)
+except Exception as exc:
+    logger.warning(
+        "sentence_transformers unavailable, using fallback embeddings: %s",
+        exc,
+    )
+
+
 def embed_texts(texts: list[str]) -> list[list[float]]:
-    """
-    OpenRouter chat models do not provide embeddings.
-
-    We therefore use deterministic local embeddings so
-    pgvector continues working.
-    """
-
     if not texts:
         return []
 
-    logger.info("Using local fallback embeddings")
+    if _embedding_model is None:
+        return _fallback_embeddings(texts)
 
-    return _fallback_embeddings(texts)
+    embeddings = _embedding_model.encode(
+        texts,
+        normalize_embeddings=True,
+    )
+
+    return embeddings.tolist()
 
 
 def embed_query(text: str) -> list[float]:
-    """
-    Embed a query for pgvector similarity search.
-    """
+    if _embedding_model is None:
+        return _fallback_embedding(text)
 
-    logger.info("Using local fallback query embedding")
+    embedding = _embedding_model.encode(
+        [text],
+        normalize_embeddings=True,
+    )
 
-    return _fallback_embedding(text)
+    return embedding[0].tolist()
 # -------------------------------------------------------------------
 # Document Summary
 # -------------------------------------------------------------------

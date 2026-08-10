@@ -1,11 +1,11 @@
 """
 routes/chat.py
 
-The route orchestrates:
-- Load conversation
-- Retrieve relevant document chunks (RAG)
-- Send context to Gemini
-- Save conversation
+Handles:
+- Conversation creation/loading
+- Document retrieval using RAG
+- Sending document context to the LLM
+- Saving user and assistant messages
 """
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -17,8 +17,12 @@ from app.database import get_db
 from app.models import Conversation, Message
 from app.schemas import ChatRequest, ChatResponse, ResponseMessage
 from app.services.llm import SYSTEM, LLMError, generate_reply
-from app.services.rag import retrieve, retrieve_with_documents
-
+from app.services.rag import (
+    retrieve,
+    retrieve_with_documents,
+    get_latest_document,
+    get_document_text,
+)
 
 router = APIRouter()
 
@@ -110,16 +114,20 @@ def chat(req: ChatRequest, db: Session = Depends(get_db)):
     )
 
     # Load conversation history
-
     history = crud.load_history(
         db,
         conv.id,
     )
+
     related_documents = []
 
-    question = req.message.lower()
+    question = req.message.lower().strip()
 
-    document_questions = [
+    # ---------------------------------------------------------
+    # Detect summary / vague / general document questions
+    # ---------------------------------------------------------
+
+    document_overview_questions = [
         "summary",
         "summarize",
         "overview",
@@ -131,110 +139,232 @@ def chat(req: ChatRequest, db: Session = Depends(get_db)):
         "tell me about this document",
         "explain this pdf",
         "explain this document",
+        "important information",
+        "any important information",
+        "anything important",
+        "important points",
+        "key information",
+        "key points",
+        "anything useful",
+        "anything specific",
+        "any specific information",
+        "specific information",
+        "what is important",
+        "what are the important points",
+        "what are the key points",
     ]
 
-    if any(q in question for q in document_questions):
+    is_document_overview_question = any(
+        q in question
+        for q in document_overview_questions
+    )
 
-        from app.services.rag import (
-            get_latest_document,
-            get_document_text,
-        )
+    context = ""
+    retrieved_chunks = []
 
-        latest_doc = get_latest_document(db)
+    # ---------------------------------------------------------
+    # Get latest uploaded document
+    # ---------------------------------------------------------
+
+    from app.services.rag import (
+        get_latest_document,
+        get_document_text,
+    )
+
+    latest_doc = get_latest_document(db)
+
+    # ---------------------------------------------------------
+    # General / vague document questions
+    # Use the complete latest document
+    # ---------------------------------------------------------
+
+    if is_document_overview_question:
 
         if latest_doc:
             context = get_document_text(
                 db,
                 latest_doc.filename,
             )
-        else:
-            context = ""
+
+            related_documents.append(
+                {
+                    "id": str(latest_doc.id),
+                    "name": latest_doc.filename,
+                }
+            )
+
+    # ---------------------------------------------------------
+    # Specific document questions
+    # Use normal RAG retrieval
+    # ---------------------------------------------------------
 
     else:
-        # Existing retrieval (kept for answer generation)
+
         document_keywords = [
             "document",
             "pdf",
             "file",
-            "summary",
-            "summarize",
+            "report",
+            "paper",
+            "topic",
+            "information",
             "explain",
-            "what is in",
+            "what is",
+            "what are",
             "tell me about",
+            "describe",
+            "focus",
+            "purpose",
         ]
 
-    use_rag = any(
-        keyword in req.message.lower()
-        for keyword in document_keywords
-    )
+        use_rag = any(
+            keyword in question
+            for keyword in document_keywords
+        )
 
-    retrieved_chunks = retrieve(db, req.message)
+        if use_rag:
 
-    print("\n========== RETRIEVED CHUNKS ==========")
-    print(retrieved_chunks)
-    print("=====================================\n")
+            retrieved_chunks = retrieve(
+                db,
+                req.message,
+            )
 
-    if len(retrieved_chunks) >= 2:
-        context = "\n\n".join(retrieved_chunks)
-    else:
-        context = ""
+            print("\n========== RETRIEVED CHUNKS ==========")
+            print(f"RAG enabled: {use_rag}")
+            print(f"Retrieved: {len(retrieved_chunks)}")
+            print("=======================================\n")
 
-    # New retrieval with document information
-    retrieved_data = retrieve_with_documents(db, req.message)
+            if retrieved_chunks:
+                context = "\n\n".join(retrieved_chunks)
 
-    related_documents = []
+            retrieved_data = retrieve_with_documents(
+                db,
+                req.message,
+            )
 
-    seen = set()
+            seen = set()
 
-    for item in retrieved_data:
-        if item["document_id"] not in seen:
-            seen.add(item["document_id"])
+            for item in retrieved_data:
+
+                if item["document_id"] not in seen:
+
+                    seen.add(item["document_id"])
+
+                    related_documents.append(
+                        {
+                            "id": str(item["document_id"]),
+                            "name": item["document_name"],
+                        }
+                    )
+
+    # ---------------------------------------------------------
+    # Fallback:
+    # If RAG finds nothing, use the latest document
+    # ---------------------------------------------------------
+
+    if not context and latest_doc:
+
+        print(
+            "RAG returned no context. "
+            "Falling back to latest document."
+        )
+
+        context = get_document_text(
+            db,
+            latest_doc.filename,
+        )
+
+        if not related_documents:
 
             related_documents.append(
                 {
-                    "id": str(item["document_id"]),
-                    "name": item["document_name"],
+                    "id": str(latest_doc.id),
+                    "name": latest_doc.filename,
                 }
             )
 
+    # ---------------------------------------------------------
+    # Build prompt
+    # ---------------------------------------------------------
+
     system = SYSTEM
 
-    if len(retrieved_chunks) > 0:
+    if context:
 
         system += """
-
 You are Smart Support Assistant.
 
-You answer ONLY using the uploaded document.
+Your job is to answer the CURRENT USER QUESTION using the uploaded
+document as the primary source.
 
-Rules:
+Important rules:
 
-- Never say you cannot access the document.
-- Never ask the user to upload it again.
-- Use ONLY the DOCUMENT below.
-- If the answer is not present, reply exactly:
+1. Always answer the CURRENT question.
+2. Do not simply repeat a previous assistant answer.
+3. Use the uploaded document as the primary source of information.
+4. If the answer is clearly available in the document, answer it
+   directly and naturally.
+5. If the question is vague or general, identify the most relevant
+   important or specific information from the document.
+6. If the user asks about something that is NOT mentioned in the
+   document, do not simply say "I couldn't find that information."
+   Instead, give a natural and helpful response based on what can
+   reasonably be determined from the document.
 
-"I couldn't find that information in the uploaded document."
+For example:
 
+User: "Does NALCO produce gold?"
+
+If the document lists NALCO's products and gold is not among them,
+respond naturally, for example:
+
+"No. Gold is not listed as a product produced by NALCO in the
+document. The document mentions products such as alumina, aluminium,
+ingots, billets, wire rods, and alloy wire rods."
+
+7. When answering a question about something not mentioned in the
+   document, do NOT invent facts or use unrelated outside knowledge.
+8. If the document does not provide enough information to determine
+   whether something is true or false, say so naturally. For example:
+
+"The document does not mention whether NALCO produces gold, so I
+can't confirm that from the document."
+
+9. Keep answers relevant to the user's exact question.
+10. Do not unnecessarily mention that you are an AI.
+11. Do not answer based on previous questions unless the CURRENT
+    question clearly refers to them.
 """
 
-        history[-1]["content"] = f"""
-
-print("\n========== CONTEXT ==========")
-print(context)
-print("================================\n")
-DOCUMENT:
+        history.append(
+            {
+                "role": "user",
+                "content": f"""
+DOCUMENT CONTEXT:
 
 {context}
 
--------------------------
-
-QUESTION:
+CURRENT QUESTION:
 
 {req.message}
 
-Answer ONLY from the DOCUMENT.
-"""
+Answer the CURRENT QUESTION using only the DOCUMENT CONTEXT.
+""",
+            }
+        )
+
+    else:
+
+        history.append(
+            {
+                "role": "user",
+                "content": req.message,
+            }
+        )
+
+    # ---------------------------------------------------------
+    # Generate AI response
+    # ---------------------------------------------------------
 
     try:
         reply = generate_reply(
@@ -244,12 +374,12 @@ Answer ONLY from the DOCUMENT.
 
     except LLMError:
         db.rollback()
-
         raise HTTPException(
             status_code=502,
             detail="Assistant unavailable, please retry",
         )
 
+    # Save assistant response
     crud.save_message(
         db,
         conv.id,
